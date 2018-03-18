@@ -7,10 +7,13 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNet.SignalR.Client;
+using Microsoft.AspNet.SignalR.Client.Http;
+using Microsoft.AspNet.SignalR.Client.Transports;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Serilog;
@@ -191,13 +194,44 @@ namespace Thinktecture.Relay.OnPremiseConnector.SignalR
 
 			try
 			{
-				await Start().ConfigureAwait(false);
+				await Start(CustomAutoTransport()).ConfigureAwait(false);
 				_logger?.Information("Connected to RelayServer {RelayServerUri} with connection id {ConnectionId}", Uri, ConnectionId);
 			}
 			catch (Exception ex)
 			{
 				_logger?.Error(ex, "Error while connecting to RelayServer {RelayServerUri} with connection id {RelayServerConnectionInstanceId}", Uri, RelayServerConnectionInstanceId);
 			}
+		}
+
+		private IClientTransport CustomAutoTransport()
+		{
+			var httpClient = new DefaultHttpClient();
+
+			if (OsHasNativeWebSockets())
+				return new AutoTransport(httpClient);
+
+			var autoTransport = new AutoTransport(httpClient, new List<IClientTransport>
+			{
+				new WebSocket4NetTransport(httpClient),
+				new ServerSentEventsTransport(httpClient),
+				new LongPollingTransport(httpClient)
+			});
+			return autoTransport;
+		}
+
+		private static bool OsHasNativeWebSockets()
+		{
+			if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+				return false;
+
+			var osDescriptionTokens = RuntimeInformation.OSDescription.Split(new[] { " " }, StringSplitOptions.RemoveEmptyEntries);
+			Version osVersion = null;
+			foreach (var token in osDescriptionTokens)
+			{
+				if (Version.TryParse(token, out osVersion))
+					break;
+			}
+			return osVersion != null && ((osVersion.Major == 6 && osVersion.Minor >= 2) || osVersion.Major > 6);
 		}
 
 		public async Task<bool> TryRequestAuthorizationTokenAsync()
